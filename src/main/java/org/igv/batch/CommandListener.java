@@ -17,6 +17,7 @@ import org.igv.util.StringUtils;
 import java.awt.*;
 import java.io.*;
 import java.net.ServerSocket;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.net.URLDecoder;
 import java.nio.channels.ClosedByInterruptException;
@@ -111,7 +112,9 @@ public class CommandListener implements Runnable {
         try {
             CommandExecutor cmdExe = new CommandExecutor(IGV.getInstance());
 
-            serverSocket = new ServerSocket(port);
+            serverSocket = Boolean.getBoolean("igv.remote.loopback")
+                    ? new ServerSocket(port, 50, InetAddress.getLoopbackAddress())
+                    : new ServerSocket(port);
             log.info("Listening on port " + port);
             currentListenerPort = port;
             while (!halt) {

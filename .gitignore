@@ -1,6 +1,14 @@
 /.github/
 /.gradle/
 /build/
+/.gradle-user/
+/.npm-cache/
+/remote/.cache/
+**/__pycache__/
+/vscode/node_modules/
+/vscode/dist/
+/vscode/*.vsix
+/vscode/LICENSE
 /.idea/
 
 #JENV local config file

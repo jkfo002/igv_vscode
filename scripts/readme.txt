@@ -4,7 +4,7 @@ IGV DISTRIBUTION
 
 Prerequisites:
 
-Java 17 or greater is required.  A free open source distributions of Java is available at https://adoptium.net/.
+Java 21 is required. A free open source distribution of Java is available at https://adoptium.net/.
 
 
 Instructions:
@@ -27,7 +27,7 @@ make the script executable (e.g. chmod a+x igv.sh) depending on the way the bund
 Advanced options follow -- these are not common:
 ------------------------------------------------
 
-The bat and shell scripts are configured to start IGV with 4GB of memory.  This is a 
+The Linux shell launcher starts IGV with 8GB of memory. This is a
 reasonable default for most machines but if you are working with very large datasets
 you can override this setting (and other Java-related defaults) by editing IGV's
 java_arguments file, found here (create it if it doesn't exist):
@@ -66,29 +66,27 @@ the need for the 'igv_hidpi.sh' script.
 
 Java command-line usage
 
-We don't recommend running IGV directly as a Java command-line launch as this has become more complex
-with Java 11 compared to Java 8.  We recommend the launcher scripts listed above instead.  The following 
-is for advanced users only.
+We recommend the launcher scripts listed above. The following is for advanced users only.
 
 If it's really necessary to use the Java command directly for some reason, here is the appropriate 
-command-line.  To use the default Java, independently installed (java 11 required)
+command-line. To use the default Java, independently installed (Java 21 required)
 
-     java --module-path=lib -Xmx4g @igv.args --module=org.igv/org.igv.ui.Main
+    java -Xmx8g @igv.args -cp "lib/*" org.igv.ui.Main
      
 To use the java included with our packaged bundles substitute "./jdk-21/bin/java" for "java", as follows.
 
-    ./jdk-21/bin/java --module-path=lib -Xmx4g @igv.args --module=org.igv/org.igv.ui.Main
+    ./jdk-21/bin/java -Xmx8g @igv.args -cp "lib/*" org.igv.ui.Main
 
 The above commands assume that you are launching IGV from the directory where it was unpacked.
 
 Note that this lists the memory specification directly, and that the java_arguments file will be skipped.
 If you wish to use the java_arguments file (assuming one exists), modify the above to (substituting ./jdk-21/bin/java for java as required):
 
-     java --module-path=lib @igv.args @"$HOME/.igv/java_arguments" --module=org.igv/org.igv.ui.Main
+     java @igv.args @"$HOME/.igv/java_arguments" -cp "lib/*" org.igv.ui.Main
 
 on Linux & Mac.  On Windows, use:
 
-java --module-path=lib @igv.args @"%USERPROFILE%/.igv/java_arguments" --module=org.igv/org.igv.ui.Main
+java @igv.args @"%USERPROFILE%/.igv/java_arguments" -cp "lib/*" org.igv.ui.Main
 
 In this case you can list the memory spec, HiDPI uiScaling, log4j config, etc either directly on the 
 command-line  or in the java_arguments file, as you prefer.

@@ -14,6 +14,56 @@ on:
     branches: [ "main" ]
 
 jobs:
+
+  remote-extension:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    - name: Check, test and package the extension
+      working-directory: vscode
+      run: |
+        npm install
+        npm run check
+        npm test
+        npm run package
+    - uses: actions/upload-artifact@v4
+      with:
+        name: igv-remote-vsix
+        path: vscode/*.vsix
+
+  remote-runtime:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+    - name: Unit tests and IGV distribution
+      run: |
+        python3 -m unittest discover -s remote/test -v
+        sh gradlew createDist
+    - name: Install dependencies as the ordinary runner user, without sudo
+      run: sh remote/install.sh --prefix "$RUNNER_TEMP/igv-remote"
+    - name: Verify repeat installation with the pinned dependency cache
+      run: sh remote/install.sh --prefix "$RUNNER_TEMP/igv-remote"
+    - name: Verify an actual server-rendered IGV session
+      run: python3 remote/test/smoke.py --prefix "$RUNNER_TEMP/igv-remote" --igv-dir build/IGV-dist
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: remote-logs-${{ matrix.os }}
+        path: ${{ runner.temp }}/igv-remote/run/**/*.log
   build:
 
     runs-on: ubuntu-latest

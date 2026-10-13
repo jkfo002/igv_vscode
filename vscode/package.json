@@ -1,0 +1,44 @@
+{
+  "name": "igv-remote",
+  "displayName": "IGV Remote (Java Desktop)",
+  "description": "View and control server-rendered Java IGV over VS Code Remote-SSH.",
+  "version": "0.1.0",
+  "publisher": "igv-remote",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Visualization"],
+  "extensionKind": ["workspace"],
+  "main": "./dist/extension.js",
+  "capabilities": { "untrustedWorkspaces": { "supported": false }, "virtualWorkspaces": false },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "node --test test/protocol.test.cjs",
+    "vscode:prepublish": "npm run check && npm run build",
+    "package": "vsce package --no-dependencies --allow-missing-repository"
+  },
+  "dependencies": { "@novnc/novnc": "1.6.0" },
+  "devDependencies": {
+    "@types/node": "20.12.7",
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "3.2.1",
+    "esbuild": "0.25.0",
+    "typescript": "5.8.2"
+  },
+  "contributes": {
+    "commands": [
+      { "command": "igvRemote.start", "title": "IGV Remote: 启动远程 IGV" },
+      { "command": "igvRemote.reconnect", "title": "IGV Remote: 重新连接" },
+      { "command": "igvRemote.stop", "title": "IGV Remote: 停止远程 IGV" },
+      { "command": "igvRemote.logs", "title": "IGV Remote: 查看日志" }
+    ],
+    "configuration": {
+      "title": "IGV Remote",
+      "properties": {
+        "igvRemote.runtimePrefix": { "type": "string", "default": "~/.local/share/igv-remote", "scope": "machine", "description": "远程无 sudo 依赖安装目录。" },
+        "igvRemote.igvDirectory": { "type": "string", "default": "", "scope": "machine", "description": "远程 IGV 分发目录，例如 /home/user/igv_vscode/build/IGV-dist。" },
+        "igvRemote.memory": { "type": "string", "default": "4g", "pattern": "^[1-9][0-9]*[mMgG]$", "scope": "machine", "description": "远程 Java 最大堆内存。" }
+      }
+    }
+  }
+}

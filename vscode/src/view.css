@@ -1,0 +1,8 @@
+html, body { height: 100%; padding: 0; margin: 0; overflow: hidden; }
+body { display: flex; flex-direction: column; color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+nav { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px; font: 12px sans-serif; }
+#status { margin-right: auto; }
+button { color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 0; padding: 5px 8px; cursor: pointer; }
+button:hover { background: var(--vscode-button-hoverBackground); }
+button:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+#screen { flex: 1; min-height: 0; overflow: auto; background: #222; }
