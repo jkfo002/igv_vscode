@@ -59,6 +59,53 @@ jobs:
       with:
         name: remote-logs-${{ matrix.os }}
         path: ${{ runner.temp }}/igv-remote/run/**/*.log
+
+  remote-runtime-focal:
+    # The ubuntu-20.04 hosted runner is retired; only CI uses this container.
+    runs-on: ubuntu-22.04
+    container:
+      image: ubuntu:20.04
+      # Permit PRoot to trace its own Xvnc child. Production does not need Docker.
+      options: --security-opt seccomp=unconfined
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - name: Prepare a minimal Ubuntu 20.04 test host
+      run: |
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git libstdc++6 passwd util-linux tar bzip2 xz-utils ubuntu-keyring
+        useradd --create-home --shell /bin/bash igv-ci
+    - uses: actions/checkout@v4
+    - uses: prefix-dev/setup-pixi@v0.11.0
+      with:
+        pixi-version: v0.66.0
+        pixi-bin-path: /usr/local/bin/pixi
+        run-install: false
+        cache: false
+    - name: Install, build and test the runtime as an ordinary user, without sudo
+      run: |
+        chown -R igv-ci:igv-ci "$GITHUB_WORKSPACE"
+        runuser -u igv-ci -- bash -c '
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          cd "$GITHUB_WORKSPACE"
+          pixi install
+          pixi run test-remote
+          pixi run build-igv
+          pixi run setup-remote
+          pixi run setup-remote
+          pixi run doctor
+          pixi run python remote/test/smoke.py --igv-dir build/IGV-dist
+        '
+    - uses: actions/upload-artifact@v4
+      if: failure()
+      with:
+        name: remote-logs-ubuntu-20.04
+        path: /home/igv-ci/.local/share/igv-remote/run/**/*.log
+
   build:
 
     runs-on: ubuntu-latest

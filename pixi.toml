@@ -6,6 +6,11 @@ channels = ["conda-forge"]
 platforms = ["linux-64"]
 license = "MIT"
 
+[system-requirements]
+# Resolve both environments against Ubuntu 20.04's glibc baseline, not a newer host.
+linux = "4.18"
+libc = { family = "glibc", version = "2.31" }
+
 [dependencies]
 python = "3.12.*"
 openjdk = "21.*"

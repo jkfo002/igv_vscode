@@ -22,7 +22,7 @@ BAM、CRAM、VCF、BigWig、索引和参考序列不需要复制到本地；网�
 #### Pixi 隔离环境与依赖安装（无需 sudo）
 
 仓库根目录提供 [pixi.toml](pixi.toml)。远程图形运行环境针对
-**Ubuntu 22.04/24.04 x86_64**，manifest 平台为 `linux-64`；不需要完整桌面、
+**Ubuntu 20.04/22.04/24.04 x86_64**（含 20.04.3），manifest 平台为 `linux-64`；不需要完整桌面、
 物理显示器、GPU、Docker 或 sudo。服务器先准备 Pixi，参考
 [Pixi 官方安装指南](https://pixi.sh/latest/installation/)。
 
@@ -64,6 +64,54 @@ Pixi 首次解析依赖会生成 `pixi.lock`，应保留并提交该文件；后
 
 图形组件不替换系统 glibc，不能跨 Ubuntu 版本复制使用。诊断成功表示组件可加载，
 实际图形操作还需要启动会话验收。`remote/install.sh` 保留为 Pixi setup 任务的兼容入口。
+
+#### Ubuntu 20.04 兼容方案与安装指南
+
+安装器按 `/etc/os-release` 中的 `ID=ubuntu` 和 `VERSION_ID` 选择组件。
+20.04.3 的 `VERSION_ID` 仍为 `20.04`，不需要修改系统版本信息或升级到 22.04。
+
+| Ubuntu 版本 | 私有 APT 软件源系列 | VNC 密码工具包 |
+| --- | --- | --- |
+| 20.04（含 20.04.3） | focal / focal-updates / focal-security | tigervnc-common |
+| 22.04 | jammy / jammy-updates / jammy-security | tigervnc-tools |
+| 24.04 | noble / noble-updates / noble-security | tigervnc-tools |
+
+[Ubuntu Focal 的 TigerVNC 包记录](https://launchpad.net/ubuntu/focal/+source/tigervnc)
+提供 TigerVNC 1.10.1 和 `tigervnc-common`，没有独立的 `tigervnc-tools`。
+安装器针对这一差异选择工具包，仍使用私有下载、SHA256 校验与解包，不执行系统级安装。
+
+`pixi.toml` 显式声明 glibc 2.31、Linux 内核 4.18 的兼容基线，用于选择可在
+20.04 上运行的 Java 21、Python 3.12 等依赖；同一约束也适用于 dev 环境。
+[Ubuntu 20.04 的 glibc 为 2.31](https://launchpad.net/ubuntu/focal/+source/glibc)，
+[Pixi 的系统要求说明](https://pixi.prefix.dev/v0.66.0/workspace/system_requirements/)
+解释了这些约束如何参与依赖解析。这不会安装或替换系统 glibc，
+也不应通过 `CONDA_OVERRIDE_GLIBC` 伪造较高系统版本来绕过兼容检查。
+图形包仅使用当前 Ubuntu 版本的软件源，不从 22.04/24.04 借用二进制文件。
+
+在普通用户可写的服务器仓库目录中执行：
+
+```sh
+uname -m                    # 应为 x86_64
+getconf GNU_LIBC_VERSION     # 20.04 通常为 glibc 2.31
+pixi install
+pixi run setup-remote
+pixi run doctor
+pixi run build-igv
+pixi run python remote/test/smoke.py --igv-dir build/IGV-dist
+```
+
+首次 install 成功后保留生成的 `pixi.lock`；已有锁文件在 manifest 更新后需先执行
+`pixi install` 重新解析，再使用 `pixi install --locked`。当前开发环境未安装 Pixi，
+因此没有提交未经实际解析生成的锁文件。原有系统 Python 3.8 不参与运行，
+也不需要更改默认 Java。完成上述步骤后按下文安装 VSIX 并连接 Remote-SSH。
+[VS Code 官方要求](https://code.visualstudio.com/docs/remote/linux)包含 Ubuntu 20.04+；
+服务器仍须已有可用的 SSH 服务和所需基础工具，Pixi 不负责配置 SSH 服务。
+
+20.04 适配已加入代码和 CI 验证任务，但尚未在当前 Windows 开发环境完成
+Pixi 依赖解析或 Linux 图形实测。`doctor` 和 smoke 成功后，还须在实际服务器验证
+track、菜单、弹窗、键鼠和断线恢复，不能将配置兼容视为完整功能验收。
+20.04 的标准维护已在 2025 年 5 月结束，扩展安全维护属于
+[Ubuntu Pro/ESM](https://ubuntu.com/20-04)；本安装器不启用 Pro，也不绕过其授权。
 
 #### 构建 Java IGV 与 VS Code 插件
 
@@ -175,10 +223,13 @@ pixi run smoke
 pixi run -e dev check-extension
 ```
 
-完整验收还需在两种 Ubuntu 环境中以普通用户安装并启动，通过 Windows VS Code
+完整验收还需在 Ubuntu 20.04、22.04、24.04 环境中以普通用户安装并启动，通过 Windows VS Code
 验证菜单、弹窗、键鼠、track 显示、断线恢复和超时清理。纯单元测试不能代替该验收。
-CI 已加入两种 Ubuntu 的 Pixi 安装、无 sudo 图形准备、重复安装、真实 Java IGV 窗口与
+CI 已加入三个 Ubuntu 版本的 Pixi 安装、无 sudo 图形准备、重复安装、真实 Java IGV 窗口与
 WebSocket/VNC 链路检查，以及 VSIX 构建任务；CI 日志需实际运行后确认。
+由于 GitHub 已停用 `ubuntu-20.04` 托管 runner，20.04 测试在 `ubuntu:20.04` 容器中进行；
+容器初始化仅准备基础系统工具，Pixi 依赖安装、图形准备、构建和 smoke 均由普通用户执行。
+容器仅用于 CI，不是服务器部署要求；容器测试也不能代替真实服务器的 ptrace 策略验收。
 
 ### Building
 

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from install import pixi_environment
+from install import deb_packages, pixi_environment
 from runtime import environment, native_environment, binary
 from session import Controller, Lease, private_json, stop_process, reserve_display
 
@@ -72,6 +72,29 @@ class ControllerTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_graphics_dependencies_use_the_available_vnc_tools_and_keep_host_glibc(self):
+        for ubuntu, vnc_tools in (("20.04", "tigervnc-common"), ("22.04", "tigervnc-tools"),
+                                  ("24.04", "tigervnc-tools")):
+            with self.subTest(ubuntu=ubuntu):
+                def apt_depends(args):
+                    if ubuntu == "20.04" and "tigervnc-tools" in args:
+                        raise subprocess.CalledProcessError(100, args, stderr="Unable to locate package tigervnc-tools")
+                    tools = "tigervnc-tools\n" if "tigervnc-tools" in args else ""
+                    return ("tigervnc-standalone-server\n  Depends: tigervnc-common\ntigervnc-common\n"
+                            + tools + "libx11-6:amd64\n  Depends: libc6\n"
+                            "libc6\nlibc-bin\nlibgcc-s1\ngcc-10-base\nlibx11-6:amd64\n"
+                            "<debconf-2.0>\n  debconf\n")
+
+                with patch("install.run", side_effect=apt_depends):
+                    packages = deb_packages([], ubuntu)
+                self.assertIn(vnc_tools, packages)
+                if ubuntu == "20.04":
+                    self.assertNotIn("tigervnc-tools", packages)
+                self.assertIn("libx11-6", packages)
+                self.assertIn("x11-xkb-utils", packages)
+                self.assertFalse({"libc6", "libc-bin", "libgcc-s1", "gcc-10-base", "<debconf-2.0>"} & set(packages))
+                self.assertEqual(packages.count("libx11-6"), 1)
+
     def test_setup_rejects_system_python_even_with_an_environment_prefix(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.dict("os.environ", {"CONDA_PREFIX": directory, "PIXI_PROJECT_ROOT": directory}):

@@ -16,10 +16,15 @@ from xml.sax.saxutils import escape
 
 from runtime import DEFAULT_PREFIX
 
-GRAPHICS = ["tigervnc-standalone-server", "tigervnc-tools", "openbox", "proot",
+# Ubuntu codename and package providing tigervncpasswd/vncpasswd.
+UBUNTU_RELEASES = {"20.04": ("focal", "tigervnc-common"),
+                   "22.04": ("jammy", "tigervnc-tools"),
+                   "24.04": ("noble", "tigervnc-tools")}
+GRAPHICS = ["tigervnc-standalone-server", "openbox", "proot",
             "xauth", "x11-xkb-utils", "x11-utils", "xkb-data", "fontconfig", "fonts-dejavu-core"]
 # Keep the host loader/glibc together. Other libraries are installed privately.
-HOST_PACKAGES = {"libc6", "libc-bin", "libgcc-s1", "gcc-12-base", "gcc-13-base",
+HOST_PACKAGES = {"libc6", "libc-bin", "libgcc-s1", "gcc-9-base", "gcc-10-base", "gcc-11-base",
+                 "gcc-12-base", "gcc-13-base",
                  "gcc-14-base", "debconf", "dpkg", "ucf", "init-system-helpers"}
 
 
@@ -43,11 +48,11 @@ def digest(path):
 
 def check_host():
     if platform.system() != "Linux" or platform.machine() not in ("x86_64", "amd64"):
-        raise RuntimeError("Supported host: Ubuntu 22.04/24.04 x86_64")
+        raise RuntimeError("Supported host: Ubuntu 20.04/22.04/24.04 x86_64")
     release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines()
                    if "=" in line)
-    if release.get("ID", "").strip('"') != "ubuntu" or release.get("VERSION_ID", "").strip('"') not in ("22.04", "24.04"):
-        raise RuntimeError("Supported host: Ubuntu 22.04/24.04 x86_64")
+    if release.get("ID", "").strip('"') != "ubuntu" or release.get("VERSION_ID", "").strip('"') not in UBUNTU_RELEASES:
+        raise RuntimeError("Supported host: Ubuntu 20.04/22.04/24.04 x86_64")
     for command in ("apt-cache", "apt-get", "dpkg-deb"):
         if not shutil.which(command):
             raise RuntimeError("Required base tool missing: " + command)
@@ -60,7 +65,7 @@ def apt_options(prefix, ubuntu):
     apt = prefix / "apt"
     for child in ("lists/partial", "archives/partial", "empty"):
         (apt / child).mkdir(parents=True, exist_ok=True)
-    codename = {"22.04": "jammy", "24.04": "noble"}[ubuntu]
+    codename = UBUNTU_RELEASES[ubuntu][0]
     keyring = Path("/usr/share/keyrings/ubuntu-archive-keyring.gpg")
     if not keyring.is_file():
         raise RuntimeError("Ubuntu archive keyring is missing: " + str(keyring))
@@ -82,20 +87,21 @@ def apt_options(prefix, ubuntu):
             "-o", "Acquire::Languages=none"]
 
 
-def deb_packages(options):
+def deb_packages(options, ubuntu):
+    graphics = [*GRAPHICS, UBUNTU_RELEASES[ubuntu][1]]
     output = run(["apt-cache", *options, "depends", "--recurse", "--no-recommends", "--no-suggests",
-                  "--no-conflicts", "--no-breaks", "--no-replaces", "--no-enhances", *GRAPHICS])
+                  "--no-conflicts", "--no-breaks", "--no-replaces", "--no-enhances", *graphics])
     # Non-indented lines are real package headings; virtual alternatives are <...>.
     names = {line.strip().split(":")[0] for line in output.splitlines()
              if line and not line[0].isspace() and re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::amd64)?", line)}
-    names.update(GRAPHICS)
+    names.update(graphics)
     return sorted(names - HOST_PACKAGES)
 
 
-def install_debs(prefix, cache, options, previous=None):
+def install_debs(prefix, cache, options, ubuntu, previous=None):
     records = []
     pinned = {entry["package"]: entry for entry in (previous or {}).get("debs", [])}
-    for name in sorted(pinned) if pinned else deb_packages(options):
+    for name in sorted(pinned) if pinned else deb_packages(options, ubuntu):
         if name in pinned:
             version = pinned[name]["version"]
         else:
@@ -167,7 +173,7 @@ def install(prefix):
         print("Refreshing private Ubuntu package indexes…", flush=True)
         run(["apt-get", *options, "update"])
     print("Installing private graphics libraries…", flush=True)
-    records = install_debs(graphics, cache, options, pinned)
+    records = install_debs(graphics, cache, options, ubuntu, pinned)
     (graphics / "graphics.json").write_text(json.dumps({"ubuntu": ubuntu, "debs": records}, indent=2))
     (prefix / "fonts.conf").write_text(
         '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig>'
