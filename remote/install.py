@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install an IGV graphics runtime into a user-owned prefix, without sudo."""
+"""Prepare private Ubuntu graphics assets for the active Pixi environment."""
 
 import argparse
 import hashlib
@@ -11,17 +11,13 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
-import urllib.request
 from xml.sax.saxutils import escape
 
 from runtime import DEFAULT_PREFIX
 
-PIP_VERSION = "25.1.1"
-WEBSOCKIFY_VERSION = "0.13.0"
 GRAPHICS = ["tigervnc-standalone-server", "tigervnc-tools", "openbox", "proot",
-            "xauth", "x11-xkb-utils", "x11-utils", "xkb-data", "fontconfig", "fonts-dejavu-core", "python3-venv"]
+            "xauth", "x11-xkb-utils", "x11-utils", "xkb-data", "fontconfig", "fonts-dejavu-core"]
 # Keep the host loader/glibc together. Other libraries are installed privately.
 HOST_PACKAGES = {"libc6", "libc-bin", "libgcc-s1", "gcc-12-base", "gcc-13-base",
                  "gcc-14-base", "debconf", "dpkg", "ucf", "init-system-helpers"}
@@ -30,13 +26,11 @@ HOST_PACKAGES = {"libc6", "libc-bin", "libgcc-s1", "gcc-12-base", "gcc-13-base",
 def run(args, **kwargs):
     env = kwargs.pop("env", os.environ.copy())
     env["LC_ALL"] = "C"
+    if args[0] in ("apt-get", "apt-cache", "dpkg-deb"):
+        env.pop("LD_LIBRARY_PATH", None)
+        env.pop("LD_PRELOAD", None)
     kwargs["env"] = env
     return subprocess.run(args, check=True, text=True, capture_output=True, **kwargs).stdout
-
-
-def metadata(url):
-    with urllib.request.urlopen(url, timeout=60) as response:
-        return json.load(response)
 
 
 def digest(path):
@@ -45,20 +39,6 @@ def digest(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             value.update(block)
     return value.hexdigest()
-
-
-def download(url, sha256, target):
-    if target.is_file() and digest(target) == sha256:
-        return
-    part = target.with_suffix(target.suffix + ".partial")
-    try:
-        with urllib.request.urlopen(url, timeout=120) as response, part.open("wb") as stream:
-            shutil.copyfileobj(response, stream)
-        if digest(part) != sha256:
-            raise RuntimeError("SHA256 mismatch: " + target.name)
-        part.replace(target)
-    finally:
-        part.unlink(missing_ok=True)
 
 
 def check_host():
@@ -146,100 +126,64 @@ def install_debs(prefix, cache, options, previous=None):
     return records
 
 
-def install_jdk(prefix, cache, previous=None):
-    if previous:
-        record = previous["jdk"]
-    else:
-        releases = metadata("https://api.adoptium.net/v3/assets/latest/21/hotspot"
-                            "?architecture=x64&image_type=jdk&os=linux&vendor=eclipse")
-        release = releases[0]
-        package = release["binary"]["package"]
-        record = {"version": release["release_name"], "sha256": package["checksum"],
-                  "url": package["link"], "filename": package["name"]}
-    archive = cache / record["filename"]
-    download(record["url"], record["sha256"], archive)
-    if not (prefix / "jdk" / "bin" / "java").exists():
-        with tempfile.TemporaryDirectory(prefix="jdk-", dir=prefix) as staging:
-            with tarfile.open(archive) as tar:
-                extract_jdk(tar, Path(staging))
-            directories = [p for p in Path(staging).iterdir() if p.is_dir()]
-            if len(directories) != 1:
-                raise RuntimeError("Unexpected JDK archive layout")
-            directories[0].rename(prefix / "jdk")
-    return record
-
-
-def extract_jdk(tar, base):
-    """Validate before extracting; reject devices and paths outside the prefix."""
-    base = base.resolve()
-    for member in tar.getmembers():
-        target = (base / member.name).resolve()
-        if not target.is_relative_to(base) or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
-            raise RuntimeError("Unsafe JDK archive path")
-        if member.issym() or member.islnk():
-            linked = ((target.parent if member.issym() else base) / member.linkname).resolve()
-            if not linked.is_relative_to(base):
-                raise RuntimeError("Unsafe JDK archive link")
-    tar.extractall(base)
-
-
-def pip_wheel(cache):
-    release = metadata("https://pypi.org/pypi/pip/" + PIP_VERSION + "/json")
-    wheel = next(f for f in release["urls"] if f["filename"].endswith(".whl"))
-    target = cache / wheel["filename"]
-    download(wheel["url"], wheel["digests"]["sha256"], target)
-    return target
+def pixi_environment():
+    """Validate actual executables instead of silently selecting system tools."""
+    value = os.environ.get("CONDA_PREFIX")
+    if not value or not os.environ.get("PIXI_PROJECT_ROOT"):
+        raise RuntimeError("Run 'pixi install' then 'pixi run setup-remote' from the repository")
+    conda = Path(value).expanduser().resolve()
+    if not Path(sys.executable).resolve().is_relative_to(conda):
+        raise RuntimeError("Python is outside the active Pixi environment")
+    java_home = conda / "lib" / "jvm"
+    java = java_home / "bin" / "java"
+    if not java.is_file() or not (java_home / "bin" / "javac").is_file():
+        raise RuntimeError("Pixi openjdk package is missing; run pixi install")
+    result = subprocess.run([str(java), "-version"], text=True, capture_output=True, check=True)
+    if not re.search(r'version "21[.\"]', result.stderr + result.stdout):
+        raise RuntimeError("Java 21 is required in the Pixi environment")
+    import websockify  # Verify Pixi installed the Python bridge before preparing graphics.
+    return conda, java_home, java
 
 
 def install(prefix):
     ubuntu = check_host()
+    conda, java_home, java = pixi_environment()
     prefix = prefix.expanduser().resolve()
     if prefix == Path.home().resolve() or prefix == Path("/"):
         raise RuntimeError("Choose a dedicated installation directory")
     prefix.mkdir(parents=True, exist_ok=True, mode=0o700)
-    cache = prefix / "cache"
+    graphics = conda / "share" / "igv-remote"
+    graphics.mkdir(parents=True, exist_ok=True)
+    cache = graphics / "cache"
     cache.mkdir(exist_ok=True)
     previous = json.loads((prefix / "runtime.json").read_text()) if (prefix / "runtime.json").exists() else None
     if previous and previous.get("ubuntu") != ubuntu:
         raise RuntimeError("This prefix belongs to a different Ubuntu release; use a new prefix")
-    options = apt_options(prefix, ubuntu)
-    if not previous:
+    pinned = json.loads((graphics / "graphics.json").read_text()) if (graphics / "graphics.json").exists() else None
+    if pinned and pinned.get("ubuntu") != ubuntu:
+        raise RuntimeError("Graphics assets belong to a different Ubuntu release; recreate the Pixi environment")
+    options = apt_options(graphics, ubuntu)
+    if not pinned:
         print("Refreshing private Ubuntu package indexes…", flush=True)
         run(["apt-get", *options, "update"])
     print("Installing private graphics libraries…", flush=True)
-    records = install_debs(prefix, cache, options, previous)
-    jdk = install_jdk(prefix, cache, previous)
-    python = prefix / "venv" / "bin" / "python"
-    if not python.exists():
-        bootstrap = os.environ.copy()
-        bootstrap["PYTHONPATH"] = str(prefix / "root" / "usr" / "lib" / ("python" + str(sys.version_info.major) + "." + str(sys.version_info.minor)))
-        run([sys.executable, "-m", "venv", "--without-pip", str(prefix / "venv")], env=bootstrap)
-    pip = pip_wheel(cache)
-    # Resolve transitive wheels once; record their exact versions and hashes for reuse.
-    report = prefix / "python-packages.json"
-    lock_path = prefix / "requirements.lock"
-    requirements = ["--require-hashes", "-r", str(lock_path)] if lock_path.exists() else ["websockify==" + WEBSOCKIFY_VERSION]
-    run([str(python), str(pip / "pip"), "install", "--disable-pip-version-check",
-         "--only-binary=:all:", "--target", str(prefix / "python"), "--upgrade",
-         "--cache-dir", str(cache / "pip"), "--report", str(report),
-         *requirements])
-    installed = json.loads(report.read_text())
-    lock = []
-    for item in installed["install"]:
-        sha = item["download_info"]["archive_info"]["hashes"]["sha256"]
-        lock.append(item["metadata"]["name"] + "==" + item["metadata"]["version"] + " --hash=sha256:" + sha)
-    lock_path.write_text("\n".join(sorted(lock)) + "\n")
+    records = install_debs(graphics, cache, options, pinned)
+    (graphics / "graphics.json").write_text(json.dumps({"ubuntu": ubuntu, "debs": records}, indent=2))
     (prefix / "fonts.conf").write_text(
         '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig>'
-        '<dir>' + escape(str(prefix / "root" / "usr" / "share" / "fonts")) + '</dir>'
-        '<dir>/usr/share/fonts</dir><cachedir>' + escape(str(prefix / "font-cache"))
+        '<dir>' + escape(str(conda / "fonts")) + '</dir><dir>'
+        + escape(str(conda / "share" / "fonts")) + '</dir><dir>'
+        + escape(str(graphics / "root" / "usr" / "share" / "fonts")) + '</dir>'
+        '<cachedir>' + escape(str(prefix / "font-cache"))
         + '</cachedir><include ignore_missing="yes">'
-        + escape(str(prefix / "root" / "etc" / "fonts" / "conf.d")) + '</include></fontconfig>')
-    manifest = {"schemaVersion": 1, "ubuntu": ubuntu, "python": str(python),
-                "jdk": jdk, "debs": records, "websockify": WEBSOCKIFY_VERSION}
+        + escape(str(graphics / "root" / "etc" / "fonts" / "conf.d")) + '</include></fontconfig>')
+    manifest = {"schemaVersion": 2, "manager": "pixi", "ubuntu": ubuntu,
+                "python": str(Path(sys.executable).absolute()), "java": str(java),
+                "javaHome": str(java_home), "condaPrefix": str(conda), "graphicsPrefix": str(graphics),
+                "pixiManifest": str(Path(os.environ["PIXI_PROJECT_ROOT"]) / "pixi.toml")}
     (prefix / "runtime.json").write_text(json.dumps(manifest, indent=2))
     print("Installed runtime: " + str(prefix))
-    run([str(python), str(Path(__file__).with_name("session.py")), "diagnose", "--prefix", str(prefix)])
+    run([sys.executable, str(Path(__file__).with_name("session.py")), "diagnose", "--prefix", str(prefix)])
     print("Dependency diagnostics: OK")
 
 

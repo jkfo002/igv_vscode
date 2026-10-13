@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 
-from runtime import DEFAULT_PREFIX, binary, environment
+from runtime import DEFAULT_PREFIX, binary, environment, native_environment
 
 LEASE_SECONDS = 600
 OWNER_PATTERN = re.compile(r"^[a-f0-9]{32}$")
@@ -177,12 +177,13 @@ def serve(directory):
                   "state": "starting"}
     controller = Controller(descriptor)
 
-    def launch(name, command):
+    def launch(name, command, native=False):
         if controller.stop.is_set():
             raise RuntimeError("Remote startup cancelled")
         log = (directory / (name + ".log")).open("ab")
         logs.append(log)
-        process = subprocess.Popen(command, env=env, cwd=config["cwd"], stdin=subprocess.DEVNULL,
+        process = subprocess.Popen(command, env=native_environment(prefix, env) if native else env,
+                                   cwd=config["cwd"], stdin=subprocess.DEVNULL,
                                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         children.append(process)
         return process
@@ -196,22 +197,23 @@ def serve(directory):
         display, lock = reserve_display(directory)
         env["DISPLAY"] = ":" + str(display)
         descriptor["display"] = env["DISPLAY"]
+        graphics_env = native_environment(prefix, env)
         vnc_port = free_port()
         password = directory / "vnc.passwd"
         password.write_bytes(subprocess.run(
             [binary(prefix, "tigervncpasswd", "vncpasswd"), "-f"],
             input=(descriptor["vncPassword"] + "\n").encode(),
-            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, timeout=10).stdout)
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=graphics_env, timeout=10).stdout)
         password.chmod(0o600)
         try:
             auth = subprocess.run([binary(prefix, "xauth"), "-f", env["XAUTHORITY"], "add", env["DISPLAY"],
-                            ".", secrets.token_hex(16)], env=env, capture_output=True, timeout=10)
+                            ".", secrets.token_hex(16)], env=graphics_env, capture_output=True, timeout=10)
         except subprocess.TimeoutExpired:
             raise RuntimeError("xauth timed out") from None
         if auth.returncode:
             raise RuntimeError("xauth failed: " + auth.stderr.decode(errors="replace"))
         xvnc = binary(prefix, "Xtigervnc", "Xvnc")
-        help_text = subprocess.run([xvnc, "-help"], env=env, capture_output=True, text=True, timeout=10)
+        help_text = subprocess.run([xvnc, "-help"], env=graphics_env, capture_output=True, text=True, timeout=10)
         extra = []
         if "-xkbdir" in help_text.stdout + help_text.stderr:
             extra = ["-xkbdir", env["XKB_CONFIG_ROOT"]]
@@ -223,12 +225,12 @@ def serve(directory):
         vnc = launch("display", [*display_command, env["DISPLAY"], "-geometry", "1600x900", "-depth", "24",
                     "-localhost", "yes", "-rfbport", str(vnc_port), "-SecurityTypes", "VncAuth",
                     "-PasswordFile", str(password), "-auth", env["XAUTHORITY"], "-nolisten", "tcp",
-                    "-fp", "built-ins", "-NeverShared", "yes", "-DisconnectClients", "yes", "-FrameRate", "30", *extra])
+                    "-fp", "built-ins", "-NeverShared", "yes", "-DisconnectClients", "yes", "-FrameRate", "30", *extra], native=True)
         wait_port(vnc_port, vnc, cancel=controller.stop)
-        launch("openbox", [binary(prefix, "openbox"), "--config-file", str(desktop_config(directory))])
+        launch("openbox", [binary(prefix, "openbox"), "--config-file", str(desktop_config(directory))], native=True)
         prefs = directory / "igv.properties"
         prefs.write_text("PORT_ENABLED=false\n")
-        launch("igv", [str(prefix / "jdk" / "bin" / "java"), "-Xmx" + config["memory"],
+        launch("igv", [manifest["java"], "-Xmx" + config["memory"],
                      "@" + str(Path(config["igvDir"]) / "igv.args"), "-Djava.awt.headless=false",
                      "-Dsamjdk.snappy.disable=true", "-Digv.remote.loopback=true", "-Djava.net.preferIPv4Stack=true",
                      "-Djava.util.prefs.userRoot=" + str(directory / "preferences"),
@@ -323,7 +325,7 @@ def start(args):
 
 def diagnose(prefix, igv_dir=None):
     prefix, manifest, env = environment(prefix)
-    checks = [([str(prefix / "jdk" / "bin" / "java"), "-version"], "Java 21"),
+    checks = [([manifest["java"], "-version"], "Java 21"),
               ([binary(prefix, "Xtigervnc", "Xvnc"), "-version"], "TigerVNC"),
               ([binary(prefix, "openbox"), "--version"], "Openbox"),
               ([binary(prefix, "xauth"), "-V"], "xauth"),
@@ -333,11 +335,12 @@ def diagnose(prefix, igv_dir=None):
                 "/usr/bin/xkbcomp", "-version"], "PRoot/XKB user-space mapping"),
               ([manifest["python"], "-c", "import websockify; import ssl; import numpy"], "Python/websockify")]
     for command, name in checks:
-        result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=20)
+        tool_env = env if name in ("Java 21", "Python/websockify") else native_environment(prefix, env)
+        result = subprocess.run(command, env=tool_env, text=True, capture_output=True, timeout=20)
         if result.returncode:
             raise RuntimeError(name + " failed: " + result.stdout + result.stderr)
         print(name + ": OK")
-    fonts = subprocess.run([binary(prefix, "fc-list"), "-f", "%{family}\n"], env=env,
+    fonts = subprocess.run([binary(prefix, "fc-list"), "-f", "%{family}\n"], env=native_environment(prefix, env),
                            text=True, capture_output=True, check=True, timeout=20).stdout
     if "DejaVu" not in fonts:
         raise RuntimeError("Bundled DejaVu fonts are unavailable; check fonts.conf")

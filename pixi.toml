@@ -1,0 +1,39 @@
+[workspace]
+name = "igv-remote"
+version = "0.1.0"
+description = "Server-rendered Java IGV with a VS Code Remote-SSH client"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+license = "MIT"
+
+[dependencies]
+python = "3.12.*"
+openjdk = "21.*"
+websockify = "0.13.*"
+fontconfig = ">=2.15,<3"
+font-ttf-dejavu-sans-mono = ">=2.37,<3"
+
+[activation.env]
+JAVA_HOME = "$CONDA_PREFIX/lib/jvm"
+PYTHONNOUSERSITE = "1"
+
+[tasks]
+# setup-remote provisions private Ubuntu graphics assets inside this environment.
+# Preparation runs with ordinary user permissions.
+setup-remote = { cmd = "python remote/install.py", description = "Prepare private graphics assets and register this Pixi runtime" }
+doctor = { cmd = "python remote/session.py diagnose", description = "Check Java, graphics and WebSocket components" }
+build-igv = { cmd = "sh gradlew createDist", description = "Build the server-side Java IGV distribution" }
+test-remote = { cmd = "python -m unittest discover -s remote/test -v" }
+smoke = { cmd = "python remote/test/smoke.py --igv-dir build/IGV-dist", depends-on = ["setup-remote", "build-igv"] }
+
+[feature.dev.dependencies]
+nodejs = "22.*"
+
+[feature.dev.tasks]
+install-extension = { cmd = "npm install", cwd = "vscode" }
+check-extension = { cmd = "npm run check && npm test", cwd = "vscode", depends-on = ["install-extension"] }
+package-extension = { cmd = "npm run package", cwd = "vscode", depends-on = ["check-extension"] }
+
+[environments]
+default = { features = [], solve-group = "igv" }
+dev = { features = ["dev"], solve-group = "igv" }

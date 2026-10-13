@@ -1,18 +1,17 @@
-import hashlib
 import http.client
 from http.server import ThreadingHTTPServer
-import io
 import json
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from install import download, extract_jdk
+from install import pixi_environment
+from runtime import environment, native_environment, binary
 from session import Controller, Lease, private_json, stop_process, reserve_display
 
 
@@ -73,41 +72,16 @@ class ControllerTests(unittest.TestCase):
 
 
 class InstallerTests(unittest.TestCase):
-    def test_download_verifies_bytes_and_reuses_valid_archive(self):
+    def test_setup_rejects_system_python_even_with_an_environment_prefix(self):
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "source"
-            source.write_bytes(b"archive bytes")
-            dest = Path(directory) / "cached"
-            sha = hashlib.sha256(source.read_bytes()).hexdigest()
-            download(source.as_uri(), sha, dest)
-            source.unlink()
-            download(source.as_uri(), sha, dest)
-            self.assertEqual(dest.read_bytes(), b"archive bytes")
+            with patch.dict("os.environ", {"CONDA_PREFIX": directory, "PIXI_PROJECT_ROOT": directory}):
+                with self.assertRaisesRegex(RuntimeError, "Python is outside"):
+                    pixi_environment()
 
-    def test_corrupt_download_is_not_promoted_to_cache(self):
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "source"
-            source.write_bytes(b"corrupt")
-            dest = Path(directory) / "cached"
-            with self.assertRaisesRegex(RuntimeError, "SHA256"):
-                download(source.as_uri(), "0" * 64, dest)
-            self.assertFalse(dest.exists())
-            self.assertFalse((Path(directory) / "cached.partial").exists())
-
-    def test_archive_cannot_escape_installation_directory(self):
-        for name, link in [("../escaped", None), ("jdk/link", "../../escaped")]:
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                buffer = io.BytesIO()
-                with tarfile.open(fileobj=buffer, mode="w") as tar:
-                    member = tarfile.TarInfo(name)
-                    if link:
-                        member.type = tarfile.SYMTYPE
-                        member.linkname = link
-                    tar.addfile(member)
-                buffer.seek(0)
-                with tarfile.open(fileobj=buffer) as tar:
-                    with self.assertRaisesRegex(RuntimeError, "Unsafe"):
-                        extract_jdk(tar, Path(directory))
+    def test_setup_without_pixi_gives_the_new_install_commands(self):
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "pixi install"):
+                pixi_environment()
 
     def test_stopped_descriptor_invalidates_credentials(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -116,6 +90,51 @@ class InstallerTests(unittest.TestCase):
             private_json(target, {"state": "stopped"})
             self.assertNotIn("token", json.loads(target.read_text()))
             self.assertFalse(target.with_suffix(".tmp").exists())
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_registered_pixi_environment_works_without_shell_activation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            conda = Path(directory) / "conda"
+            graphics = conda / "share" / "igv-remote"
+            state.mkdir()
+            (conda / "bin").mkdir(parents=True)
+            python = conda / "bin" / "python"
+            python.touch()
+            native_bin = graphics / "root" / "usr" / "bin"
+            native_bin.mkdir(parents=True)
+            (native_bin / "Xvnc").touch()
+            java = conda / "lib" / "jvm" / "bin" / "java"
+            (state / "runtime.json").write_text(json.dumps({"schemaVersion": 2, "manager": "pixi",
+                "condaPrefix": str(conda), "graphicsPrefix": str(graphics), "python": str(python),
+                "java": str(java), "javaHome": str(java.parent.parent)}))
+            with patch.dict("os.environ", {"PYTHONPATH": "unrelated-modules", "PYTHONHOME": "unrelated-python"}):
+                _prefix, manifest, env = environment(state)
+                self.assertNotIn("PYTHONPATH", env)
+                self.assertNotIn("PYTHONHOME", env)
+                self.assertEqual(env["CONDA_PREFIX"], str(conda))
+                self.assertEqual(manifest["java"], str(java))
+                self.assertEqual(binary(state, "Xtigervnc", "Xvnc"), str(native_bin / "Xvnc"))
+                graphics_env = native_environment(state, env)
+                self.assertIn(str(graphics / "root" / "usr" / "lib"), graphics_env["LD_LIBRARY_PATH"])
+                self.assertEqual(env["LD_LIBRARY_PATH"], str(conda / "lib"))
+
+    def test_missing_pixi_environment_reports_how_to_recreate_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / "runtime.json").write_text(json.dumps({"manager": "pixi", "condaPrefix": directory,
+                                                          "python": str(state / "missing-python")}))
+            with self.assertRaisesRegex(RuntimeError, "pixi install"):
+                environment(state)
+
+    def test_previous_runtime_still_resolves_its_private_java_and_libraries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / "runtime.json").write_text(json.dumps({"schemaVersion": 1, "python": "old-python"}))
+            _prefix, manifest, env = environment(state)
+            self.assertEqual(manifest["java"], str(state.resolve() / "jdk" / "bin" / "java"))
+            self.assertEqual(env["PYTHONPATH"], str(state.resolve() / "python"))
 
 
 @unittest.skipUnless(sys.platform == "linux", "Linux process groups")

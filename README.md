@@ -19,51 +19,69 @@ BAM、CRAM、VCF、BigWig、索引和参考序列不需要复制到本地；网�
                                                    远程虚拟显示   远程数据文件
 ```
 
-#### 支持环境与依赖安装（无需 sudo）
+#### Pixi 隔离环境与依赖安装（无需 sudo）
 
-首版安装器针对 **Ubuntu 22.04/24.04 x86_64**；不需要完整桌面、物理显示器、GPU
-或 Docker。服务器需要已有的基础工具 `python3`、`apt-cache`、`apt-get`、`dpkg-deb`，
-Ubuntu 官方归档签名密钥及 HTTPS 下载能力。安装器在用户目录创建独立的 APT
-软件源和索引，包含 Main/Universe，不修改系统软件源、不执行 `apt install` 或 sudo。
+仓库根目录提供 [pixi.toml](pixi.toml)。远程图形运行环境针对
+**Ubuntu 22.04/24.04 x86_64**，manifest 平台为 `linux-64`；不需要完整桌面、
+物理显示器、GPU、Docker 或 sudo。服务器先准备 Pixi，参考
+[Pixi 官方安装指南](https://pixi.sh/latest/installation/)。
 
-安装器下载并校验 Java 21、TigerVNC、Openbox、PRoot、X11/XKB、字体和 Python/websockify。
-Ubuntu 软件包用 `dpkg-deb --extract` 解包到用户目录，Python 包安装到专用环境。
-运行路径只对远程子进程生效，不更改 `.bashrc`、系统 PATH、系统服务或防火墙。
+`pixi install` 从 conda-forge 安装 Java 21、Python 3.12、websockify、fontconfig
+和字体到项目的 `.pixi/envs/default`。`pixi run setup-remote` 再准备 TigerVNC、
+Openbox、PRoot 和 X11/XKB，图形组件解包到同一环境的 `share/igv-remote/root/`。
+图形组件使用私有 Ubuntu 软件源和索引；它们不是由 Conda solver 管理的包。
+因此完整安装需要下面的 install 和 setup 两个步骤，单独 `pixi install` 还不能启动远程桌面。
+
+图形准备任务需要服务器已有 `apt-cache`、`apt-get`、`dpkg-deb`、Ubuntu 官方
+归档签名密钥及 HTTPS 下载能力，不再要求系统 Python、单独的 JDK 或 pip。
+不会修改系统软件源、系统服务或防火墙，也不更改用户 shell 配置。
 PRoot 只为虚拟显示进程映射 XKB 的固定路径，避免要求系统安装 `/usr/bin/xkbcomp`；
 无需 root 或 mount 权限，但服务器须允许普通用户跟踪自己启动的子进程（ptrace）。
 
 在服务器上的仓库根目录执行：
 
 ```sh
-sh remote/install.sh
-python3 remote/session.py diagnose
+pixi install
+pixi run setup-remote
+pixi run doctor
 ```
 
-默认目录为 `~/.local/share/igv-remote`，也可以选择其他专用、可写目录：
+Pixi 依赖在项目 `.pixi/` 中；运行配置、日志和 IGV 自动保存文件默认放在
+`~/.local/share/igv-remote`，与可重新创建的环境分开。可自定义运行配置目录：
 
 ```sh
-sh remote/install.sh --prefix "$HOME/apps/igv-remote"
-python3 remote/session.py diagnose --prefix "$HOME/apps/igv-remote"
+pixi run setup-remote --prefix "$HOME/apps/igv-remote"
+pixi run doctor --prefix "$HOME/apps/igv-remote"
 ```
 
-`runtime.json` 记录依赖版本和校验信息，`requirements.lock` 锁定 Python 依赖；
-重复安装复用已校验的下载文件和已锁定版本。目录下的 `root/`、`jdk/`、`venv/`
-和 `python/` 是私有依赖，`run/` 保存各会话日志、IGV 配置和自动保存文件。
-安装器不替换系统 glibc；不能把同一运行目录直接复制到不同版本的 Ubuntu。
-诊断成功仅表示组件能加载，实际图形操作还需要启动会话验收。
+Pixi 首次解析依赖会生成 `pixi.lock`，应保留并提交该文件；后续用 `pixi install --locked`
+保持版本一致。图形依赖的版本和 SHA256 单独记录在环境内的 `graphics.json`，
+重复 setup 会复用已校验文件。`runtime.json` 记录真实的 Pixi Python/Java 和图形路径，
+插件因此无需先执行 `pixi shell`；不会偷偷切换到系统 Python 或其他 Conda 环境。
+移动仓库或重建 Pixi 环境后，应重新执行 `pixi run setup-remote` 更新这些绝对路径。
+旧运行目录仍可读取；新 setup 会切换到 Pixi，不自动删除旧依赖和会话文件。
+从旧安装方式迁移前先停止旧会话，再重新构建并安装 VSIX，使插件携带新版 Pixi 启动代码。
+
+图形组件不替换系统 glibc，不能跨 Ubuntu 版本复制使用。诊断成功表示组件可加载，
+实际图形操作还需要启动会话验收。`remote/install.sh` 保留为 Pixi setup 任务的兼容入口。
 
 #### 构建 Java IGV 与 VS Code 插件
 
 先在远程服务器构建本仓库的 IGV：
 
 ```sh
-export JAVA_HOME="$HOME/.local/share/igv-remote/jdk"
-export PATH="$JAVA_HOME/bin:$PATH"
-sh gradlew createDist
+pixi run build-igv
 ```
 
-使用自定义安装目录时相应调整 `JAVA_HOME`。分发目录为 `build/IGV-dist`，
-需要保留其中的 `igv.args` 和整个 `lib/`。服务器运行时不需要 Node.js。
+Pixi 自动设置 `JAVA_HOME`。分发目录为 `build/IGV-dist`，
+需要保留其中的 `igv.args` 和整个 `lib/`。默认运行环境不安装 Node.js。
+
+Linux 上可以直接使用 Pixi 的 dev 环境构建插件：
+
+```sh
+pixi install -e dev
+pixi run -e dev package-extension
+```
 
 在有 **Node.js 20+** 的开发机器上构建 VSIX（本地或远端均可）：
 
@@ -77,7 +95,8 @@ npm run package
 
 Windows 使用 `npm.cmd`。生成 `vscode/igv-remote-0.1.0.vsix`；构建会将会话管理程序
 和 noVNC 打包进插件，运行时不从 CDN 加载脚本。首次构建需要访问 npm 和 Gradle
-依赖源。本项目源代码依赖版本固定，npm 安装后请保留生成的 `package-lock.json`。
+依赖源。Pixi dev 环境管理 Node.js，插件的 npm 依赖仍由 `package.json` 管理；
+npm 安装后请保留生成的 `package-lock.json`。
 
 #### 安装与连接指南
 
@@ -125,8 +144,10 @@ Windows 使用 `npm.cmd`。生成 `vscode/igv-remote-0.1.0.vsix`；构建会将�
 
 - **缺少 APT 候选版本：**确认系统是支持的 Ubuntu，能够访问 Ubuntu 官方归档且
   `/usr/share/keyrings/ubuntu-archive-keyring.gpg` 存在；私有 APT 索引在安装目录 `apt/` 中。
-- **Java/动态库错误：**运行 `diagnose` 查看失败组件。不要直接使用不同 Ubuntu
+- **Java/动态库错误：**运行 `pixi run doctor` 查看失败组件。不要直接使用不同 Ubuntu
   版本的运行目录，也不要把运行脚本的私有 `LD_LIBRARY_PATH` 导出到全局 shell。
+- **Pixi 环境不存在或路径过期：**重新运行 `pixi install` 和 `pixi run setup-remote`；
+  移动仓库后也需 setup。Java/Python 使用 Pixi 库，Ubuntu 图形进程使用自己的运行库。
 - **PRoot/ptrace 被拒绝：**服务器或容器策略限制了子进程跟踪，当前用户目录图形
   运行方式无法启动；需在允许该能力的服务器运行，或调整服务器策略。
 - **黑屏或只显示背景：**检查 `display.log`、`openbox.log`、`igv.log`，确认 Java IGV
@@ -143,21 +164,20 @@ mv "$HOME/.local/share/igv-remote" "$HOME/.local/share/igv-remote.backup"
 ```
 
 使用自定义目录时替换上面的明确路径。备份包含日志和可能需要恢复的 IGV 自动保存
-文件；确认无需保留后再手动删除。此操作不影响系统依赖或服务器上的 track 数据。
+文件；确认无需保留后再手动删除。停止所有会话后，可在项目根目录执行 `pixi clean`
+移除依赖环境；保留 `pixi.toml` 和 `pixi.lock` 以便重建。这些操作不影响服务器上的 track 数据。
 
 #### 开发验证
 
 ```sh
-python3 -m unittest discover -s remote/test -v
-python3 remote/test/smoke.py --igv-dir build/IGV-dist
-cd vscode
-npm test
-npm run check
+pixi run test-remote
+pixi run smoke
+pixi run -e dev check-extension
 ```
 
 完整验收还需在两种 Ubuntu 环境中以普通用户安装并启动，通过 Windows VS Code
 验证菜单、弹窗、键鼠、track 显示、断线恢复和超时清理。纯单元测试不能代替该验收。
-CI 已加入两种 Ubuntu 的无 sudo 安装、重复安装、真实 Java IGV 窗口与
+CI 已加入两种 Ubuntu 的 Pixi 安装、无 sudo 图形准备、重复安装、真实 Java IGV 窗口与
 WebSocket/VNC 链路检查，以及 VSIX 构建任务；CI 日志需实际运行后确认。
 
 ### Building

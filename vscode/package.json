@@ -35,7 +35,7 @@
     "configuration": {
       "title": "IGV Remote",
       "properties": {
-        "igvRemote.runtimePrefix": { "type": "string", "default": "~/.local/share/igv-remote", "scope": "machine", "description": "远程无 sudo 依赖安装目录。" },
+        "igvRemote.runtimePrefix": { "type": "string", "default": "~/.local/share/igv-remote", "scope": "machine", "description": "pixi run setup-remote 创建的远程运行配置和会话目录。" },
         "igvRemote.igvDirectory": { "type": "string", "default": "", "scope": "machine", "description": "远程 IGV 分发目录，例如 /home/user/igv_vscode/build/IGV-dist。" },
         "igvRemote.memory": { "type": "string", "default": "4g", "pattern": "^[1-9][0-9]*[mMgG]$", "scope": "machine", "description": "远程 Java 最大堆内存。" }
       }

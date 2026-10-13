@@ -15,7 +15,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runtime import DEFAULT_PREFIX, binary, environment
+from runtime import DEFAULT_PREFIX, binary, environment, native_environment
 
 
 def request(session, route):
@@ -69,6 +69,7 @@ def main():
     try:
         env["DISPLAY"] = session["display"]
         env["XAUTHORITY"] = str(Path(session["directory"]) / "Xauthority")
+        env = native_environment(prefix, env)
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             request(session, "/heartbeat")

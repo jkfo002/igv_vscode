@@ -1,5 +1,6 @@
 /.github/
 /.gradle/
+/.pixi/
 /build/
 /.gradle-user/
 /.npm-cache/

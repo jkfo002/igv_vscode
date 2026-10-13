@@ -1,5 +1,5 @@
 #!/bin/sh
-# Bootstrap with Ubuntu's base Python, without changing shell configuration.
+# Compatibility entrypoint: dependencies are now managed by Pixi.
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec python3 "$script_dir/install.py" "$@"
+exec pixi run --manifest-path "$script_dir/../pixi.toml" setup-remote "$@"
