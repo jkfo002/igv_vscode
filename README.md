@@ -1,11 +1,7 @@
-# igv
-
-![Build Status](https://github.com/igvteam/igv/actions/workflows/gradle.yml/badge.svg)
-![GitHub issues](https://img.shields.io/github/issues/igvteam/igv)
-![GitHub closed issues](https://img.shields.io/github/issues-closed/igvteam/igv)
-![](https://img.shields.io/npm/l/igv.svg)
+# igv in vscode
 
 Integrative Genomics Viewer - desktop genome visualization tool for Mac, Windows, and Linux.
+从 [igvteam/igv](https://github.com/igvteam/igv) 而来，新增远程渲染模式。
 
 ### Remote：在 VS Code 中使用远程 Java IGV
 
@@ -23,12 +19,12 @@ BAM、CRAM、VCF、BigWig、索引和参考序列不需要复制到本地；网�
 
 仓库根目录提供 [pixi.toml](pixi.toml)。远程图形运行环境针对
 **Ubuntu 20.04/22.04/24.04 x86_64**（含 20.04.3），manifest 平台为 `linux-64`；不需要完整桌面、
-物理显示器、GPU、Docker 或 sudo。服务器先准备 Pixi，参考
-[Pixi 官方安装指南](https://pixi.sh/latest/installation/)。
+物理显示器、GPU、Docker 或 sudo。
 
-`pixi install` 从 conda-forge 安装 Java 21、Python 3.12、websockify、fontconfig、
-字体以及 GCC/binutils/make 编译工具到项目的 `.pixi/envs/default`。`pixi run setup-remote` 再准备 TigerVNC、
-Openbox、PRoot 和 X11/XKB，图形组件解包到同一环境的 `share/igv-remote/root/`。
+服务器先准备 Pixi，参考[Pixi 官方安装指南](https://pixi.sh/latest/installation/)。
+
+`pixi install` 从 conda-forge 安装 Java 21、Python 3.12、websockify、fontconfig、字体以及 GCC/binutils/make 编译工具到项目的 `.pixi/envs/default`。
+`pixi run setup-remote` 再准备 TigerVNC、Openbox、PRoot 和 X11/XKB，图形组件解包到同一环境的 `share/igv-remote/root/`。
 图形组件使用私有 Ubuntu 软件源和索引；它们不是由 Conda solver 管理的包。
 因此完整安装需要下面的 install 和 setup 两个步骤，单独 `pixi install` 还不能启动远程桌面。
 
@@ -77,9 +73,6 @@ PRoot 构建同样缓存并校验，重复 setup 不再编译。`runtime.json` �
 
 #### Ubuntu 20.04 兼容方案与安装指南
 
-安装器按 `/etc/os-release` 中的 `ID=ubuntu` 和 `VERSION_ID` 选择组件。
-20.04.3 的 `VERSION_ID` 仍为 `20.04`，不需要修改系统版本信息或升级到 22.04。
-
 | Ubuntu 版本 | 私有 APT 软件源系列 | VNC 密码工具包 |
 | --- | --- | --- |
 | 20.04（含 20.04.3） | focal / focal-updates / focal-security | tigervnc-common |
@@ -97,36 +90,6 @@ PRoot 构建同样缓存并校验，重复 setup 不再编译。`runtime.json` �
 解释了这些约束如何参与依赖解析。这不会安装或替换系统 glibc，
 也不应通过 `CONDA_OVERRIDE_GLIBC` 伪造较高系统版本来绕过兼容检查。
 图形包仅使用当前 Ubuntu 版本的软件源，不从 22.04/24.04 借用二进制文件。
-
-在普通用户可写的服务器仓库目录中执行：
-
-```sh
-uname -m                    # 应为 x86_64
-getconf GNU_LIBC_VERSION     # 20.04 通常为 glibc 2.31
-pixi install
-pixi run setup-remote
-pixi run doctor
-pixi run build-igv
-pixi run python remote/test/smoke.py --igv-dir build/IGV-dist
-```
-
-首次 install 成功后保留生成的 `pixi.lock`；已有锁文件在 manifest 更新后需先执行
-`pixi install` 重新解析，再使用 `pixi install --locked`。仓库已包含在远程 20.04.3
-环境中实际解析的锁文件；default 环境和 dev 环境的 VSIX 构建均已验证。
-原有系统 Python 3.8 不参与运行，
-也不需要更改默认 Java。完成上述步骤后按下文安装 VSIX 并连接 Remote-SSH。
-[VS Code 官方要求](https://code.visualstudio.com/docs/remote/linux)包含 Ubuntu 20.04+；
-服务器仍须已有可用的 SSH 服务和所需基础工具，Pixi 不负责配置 SSH 服务。
-
-20.04 的安装、PRoot/XKB 映射、Java IGV 构建及真实窗口/WebSocket/会话清理 smoke
-已在一台启用 seccomp 的远程 20.04.3 容器中实测通过；
-这不代表所有服务器策略或 CI 已验收。`doctor` 和 smoke 成功后，还须在实际服务器验证
-track、菜单、弹窗、键鼠和断线恢复，不能将配置兼容视为完整功能验收。
-20.04 的标准维护已在 2025 年 5 月结束，扩展安全维护属于
-[Ubuntu Pro/ESM](https://ubuntu.com/20-04)；本安装器不启用 Pro，也不绕过其授权。
-
-该服务器的重复 `pixi run setup-remote`（缓存完整，含 doctor）完整命令实测约 0.71 秒；网络和文件系统不同，
-首次安装或 `--repair` 的耗时不能以此估算。
 
 #### 构建 Java IGV 与 VS Code 插件
 
@@ -269,7 +232,7 @@ WebSocket/VNC 链路检查，以及 VSIX 构建任务；CI 日志需实际运行
 Java 全量测试共 685 项，645 项通过、38 项跳过，`JsonGenomeLoaderTest.loadGenome`
 及 `FileFormatUtilsTest.testDetermineFormat` 两项因网络访问超时失败，不能标为全量通过。
 
-### Building
+### Old igv Building Instructions
 
 These instructions are meant for developers interested in working on the IGV code. For normal use,
 we recommend the pre-built releases available
