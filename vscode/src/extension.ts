@@ -190,7 +190,7 @@ class RemoteViewer implements vscode.Disposable {
       <button id="reconnect">重新连接</button><button id="resize">调整远程分辨率：开</button>
       <button id="scale">适应窗口：关</button><button id="paste">粘贴到远程</button>
       <button id="copy">复制远程文本</button><button id="stop">保存后关闭</button></nav>
-      <div id="screen"></div><script nonce="${nonce}" src="${script}"></script></body></html>`;
+      <div id="screen"></div><script type="module" nonce="${nonce}" src="${script}"></script></body></html>`;
     // Use messaging, not HTML interpolation, to deliver ephemeral credentials.
     this.pending = { url, password: session.vncPassword };
     panel.reveal();

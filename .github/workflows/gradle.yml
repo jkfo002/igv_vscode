@@ -65,8 +65,7 @@ jobs:
     runs-on: ubuntu-22.04
     container:
       image: ubuntu:20.04
-      # Permit PRoot to trace its own Xvnc child. Production does not need Docker.
-      options: --security-opt seccomp=unconfined
+      # Keep the default seccomp policy to exercise the PRoot compatibility fix.
     permissions:
       contents: read
     defaults:

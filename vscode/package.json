@@ -17,7 +17,7 @@
     "vscode:prepublish": "npm run check && npm run build",
     "package": "vsce package --no-dependencies --allow-missing-repository"
   },
-  "dependencies": { "@novnc/novnc": "1.6.0" },
+  "dependencies": { "@novnc/novnc": "https://codeload.github.com/novnc/noVNC/tar.gz/refs/tags/v1.6.0" },
   "devDependencies": {
     "@types/node": "20.12.7",
     "@types/vscode": "1.90.0",

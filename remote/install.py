@@ -12,15 +12,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from xml.sax.saxutils import escape
 
 from runtime import DEFAULT_PREFIX
+from proot_build import install_proot
 
 # Ubuntu codename and package providing tigervncpasswd/vncpasswd.
 UBUNTU_RELEASES = {"20.04": ("focal", "tigervnc-common"),
                    "22.04": ("jammy", "tigervnc-tools"),
                    "24.04": ("noble", "tigervnc-tools")}
-GRAPHICS = ["tigervnc-standalone-server", "openbox", "proot",
+GRAPHICS = ["tigervnc-standalone-server", "openbox", "proot", "libtalloc-dev",
             "xauth", "x11-xkb-utils", "x11-utils", "xkb-data", "fontconfig", "fonts-dejavu-core"]
 # Keep the host loader/glibc together. Other libraries are installed privately.
 HOST_PACKAGES = {"libc6", "libc-bin", "libgcc-s1", "gcc-9-base", "gcc-10-base", "gcc-11-base",
@@ -98,10 +100,31 @@ def deb_packages(options, ubuntu):
     return sorted(names - HOST_PACKAGES)
 
 
-def install_debs(prefix, cache, options, ubuntu, previous=None):
+def atomic_json(path, value):
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, indent=2))
+    temporary.replace(path)
+
+
+def install_debs(prefix, cache, options, ubuntu, previous=None, repair=False):
     records = []
     pinned = {entry["package"]: entry for entry in (previous or {}).get("debs", [])}
-    for name in sorted(pinned) if pinned else deb_packages(options, ubuntu):
+    required = {*GRAPHICS, UBUNTU_RELEASES[ubuntu][1]}
+    names = sorted(pinned) if pinned and required <= pinned.keys() else sorted(set(pinned) | set(deb_packages(options, ubuntu)))
+    root = prefix / "root"
+    state_path = prefix / "extracted.json"
+    installed = {}
+    if root.is_dir() and not repair:
+        identity = [root.stat().st_dev, root.stat().st_ino]
+        if state_path.is_file():
+            state = json.loads(state_path.read_text())
+            if state.get("rootIdentity") == identity:
+                installed = state.get("packages", {})
+        else:
+            # Old graphics.json was written only after every extraction succeeded.
+            installed = pinned.copy()
+    for index, name in enumerate(names, 1):
+        print(f"[{index}/{len(names)}] {name}: checking cache", flush=True)
         if name in pinned:
             version = pinned[name]["version"]
         else:
@@ -121,14 +144,24 @@ def install_debs(prefix, cache, options, ubuntu, previous=None):
         filename = Path(fields["Filename"]).name
         archive = cache / filename
         if not archive.exists() or digest(archive) != expected:
+            print(f"[{index}/{len(names)}] {name}: downloading {version}", flush=True)
             with tempfile.TemporaryDirectory(prefix="deb-", dir=cache) as staging:
                 run(["apt-get", *options, "download", name + "=" + version], cwd=staging)
                 candidates = list(Path(staging).glob("*.deb"))
                 if len(candidates) != 1 or digest(candidates[0]) != expected:
                     raise RuntimeError("APT SHA256 mismatch: " + name)
                 candidates[0].replace(archive)
-        run(["dpkg-deb", "--extract", str(archive), str(prefix / "root")])
-        records.append({"package": name, "version": version, "sha256": expected, "filename": filename})
+        record = {"package": name, "version": version, "sha256": expected, "filename": filename}
+        if installed.get(name) == record:
+            print(f"[{index}/{len(names)}] {name}: already installed", flush=True)
+        else:
+            print(f"[{index}/{len(names)}] {name}: extracting", flush=True)
+            run(["dpkg-deb", "--extract", str(archive), str(root)])
+            installed[name] = record
+            atomic_json(state_path, {"rootIdentity": [root.stat().st_dev, root.stat().st_ino], "packages": installed})
+        records.append(record)
+    if not state_path.is_file():
+        atomic_json(state_path, {"rootIdentity": [root.stat().st_dev, root.stat().st_ino], "packages": installed})
     return records
 
 
@@ -151,7 +184,8 @@ def pixi_environment():
     return conda, java_home, java
 
 
-def install(prefix):
+def install(prefix, repair=False):
+    started = time.monotonic()
     ubuntu = check_host()
     conda, java_home, java = pixi_environment()
     prefix = prefix.expanduser().resolve()
@@ -173,8 +207,9 @@ def install(prefix):
         print("Refreshing private Ubuntu package indexes…", flush=True)
         run(["apt-get", *options, "update"])
     print("Installing private graphics libraries…", flush=True)
-    records = install_debs(graphics, cache, options, ubuntu, pinned)
-    (graphics / "graphics.json").write_text(json.dumps({"ubuntu": ubuntu, "debs": records}, indent=2))
+    records = install_debs(graphics, cache, options, ubuntu, pinned, repair)
+    atomic_json(graphics / "graphics.json", {"ubuntu": ubuntu, "debs": records})
+    install_proot(graphics, cache, conda)
     (prefix / "fonts.conf").write_text(
         '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig>'
         '<dir>' + escape(str(conda / "fonts")) + '</dir><dir>'
@@ -189,16 +224,17 @@ def install(prefix):
                 "pixiManifest": str(Path(os.environ["PIXI_PROJECT_ROOT"]) / "pixi.toml")}
     (prefix / "runtime.json").write_text(json.dumps(manifest, indent=2))
     print("Installed runtime: " + str(prefix))
-    run([sys.executable, str(Path(__file__).with_name("session.py")), "diagnose", "--prefix", str(prefix)])
-    print("Dependency diagnostics: OK")
+    print(run([sys.executable, str(Path(__file__).with_name("session.py")), "diagnose", "--prefix", str(prefix)]), end="")
+    print(f"Dependency diagnostics: OK; setup completed in {time.monotonic() - started:.2f}s")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prefix", type=Path, default=DEFAULT_PREFIX)
+    parser.add_argument("--repair", action="store_true", help="Re-extract verified cached graphics packages")
     args = parser.parse_args()
     try:
-        install(args.prefix)
+        install(args.prefix, args.repair)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", "") or str(error)
         print("Installation failed: " + detail, file=sys.stderr)

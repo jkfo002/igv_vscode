@@ -20,6 +20,11 @@ pixi run doctor
 `pixi install` 管理 Java/Python/websockify；`setup-remote` 在 Pixi 环境内准备
 TigerVNC/Openbox 等私有图形组件，无需 sudo。随后设置：
 
+遇到旧版 PRoot 的 signal 31 时，先更新仓库并执行 `pixi install` 和
+`pixi run setup-remote`；安装器会在用户目录编译兼容的 PRoot 5.4。
+重复 setup 复用缓存，不再解包或编译；损坏的图形文件可通过
+`pixi run setup-remote --repair` 从缓存恢复。详见根目录 README。
+
 ```json
 {
   "igvRemote.runtimePrefix": "~/.local/share/igv-remote",

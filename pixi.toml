@@ -17,6 +17,10 @@ openjdk = "21.*"
 websockify = "0.13.*"
 fontconfig = ">=2.15,<3"
 font-ttf-dejavu-sans-mono = ">=2.37,<3"
+# Build the pinned PRoot compatibility runtime entirely in user space.
+gcc_linux-64 = ">=12,<15"
+binutils_linux-64 = ">=2.40,<3"
+make = ">=4.3,<5"
 
 [activation.env]
 JAVA_HOME = "$CONDA_PREFIX/lib/jvm"

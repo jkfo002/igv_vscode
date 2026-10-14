@@ -1,8 +1,11 @@
 import http.client
+from contextlib import redirect_stdout
 from http.server import ThreadingHTTPServer
+import io
 import json
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import threading
@@ -10,7 +13,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from install import deb_packages, pixi_environment
+from install import GRAPHICS, deb_packages, digest, install_debs, pixi_environment
+from proot_build import BUILD_RECIPE_VERSION, SOURCE_SHA256, install_proot, sha256
 from runtime import environment, native_environment, binary
 from session import Controller, Lease, private_json, stop_process, reserve_display
 
@@ -113,6 +117,112 @@ class InstallerTests(unittest.TestCase):
             private_json(target, {"state": "stopped"})
             self.assertNotIn("token", json.loads(target.read_text()))
             self.assertFalse(target.with_suffix(".tmp").exists())
+
+
+class ExtractionTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.prefix = Path(self.directory.name) / "graphics"
+        self.cache = self.prefix / "cache"
+        self.cache.mkdir(parents=True)
+        self.records = []
+        for name in sorted({*GRAPHICS, "tigervnc-common"}):
+            archive = self.cache / (name + ".deb")
+            archive.write_bytes(name.encode())
+            self.records.append({"package": name, "version": "1", "filename": archive.name, "sha256": digest(archive)})
+        self.previous = {"debs": self.records}
+        self.extracted = []
+
+    def extract(self, args, **_kwargs):
+        self.assertEqual(args[:2], ["dpkg-deb", "--extract"])
+        target = Path(args[3])
+        target.mkdir(parents=True, exist_ok=True)
+        name = Path(args[2]).stem
+        (target / name).write_text(name)
+        self.extracted.append(name)
+        return ""
+
+    def setup_graphics(self, repair=False):
+        with redirect_stdout(io.StringIO()), patch("install.run", side_effect=self.extract):
+            return install_debs(self.prefix, self.cache, [], "20.04", self.previous, repair)
+
+    def test_repeat_setup_skips_extraction_but_repair_reextracts(self):
+        self.assertEqual(self.setup_graphics(), self.records)
+        self.assertEqual(len(self.extracted), len(self.records))
+        self.extracted.clear()
+        self.assertEqual(self.setup_graphics(), self.records)
+        self.assertEqual(self.extracted, [])
+        self.setup_graphics(repair=True)
+        self.assertEqual(len(self.extracted), len(self.records))
+
+    def test_interrupted_setup_resumes_only_unfinished_packages(self):
+        def interrupted(args, **kwargs):
+            if len(self.extracted) == 2:
+                raise subprocess.CalledProcessError(1, args)
+            return self.extract(args, **kwargs)
+
+        with redirect_stdout(io.StringIO()), patch("install.run", side_effect=interrupted):
+            with self.assertRaises(subprocess.CalledProcessError):
+                install_debs(self.prefix, self.cache, [], "20.04", self.previous)
+        completed = set(self.extracted)
+        self.extracted.clear()
+        self.setup_graphics()
+        self.assertFalse(completed & set(self.extracted))
+        self.assertEqual(len(completed) + len(self.extracted), len(self.records))
+
+    def test_deleted_graphics_root_is_not_mistaken_for_an_installed_tree(self):
+        self.setup_graphics()
+        shutil.rmtree(self.prefix / "root")
+        self.extracted.clear()
+        self.setup_graphics()
+        self.assertEqual(len(self.extracted), len(self.records))
+
+    def test_legacy_completed_install_migrates_without_reextracting(self):
+        root = self.prefix / "root"
+        root.mkdir()
+        for record in self.records:
+            (root / record["package"]).touch()
+        self.setup_graphics()
+        self.assertEqual(self.extracted, [])
+        self.assertTrue((self.prefix / "extracted.json").is_file())
+
+
+class ProotBuildTests(unittest.TestCase):
+    def test_cached_build_restores_private_executable_and_preserves_original(self):
+        with tempfile.TemporaryDirectory() as directory:
+            graphics = Path(directory)
+            private = graphics / "proot"
+            private.mkdir()
+            built = private / "proot"
+            built.write_bytes(b"verified cached build")
+            built.chmod(0o755)
+            state = {"sourceSha256": SOURCE_SHA256, "recipeVersion": BUILD_RECIPE_VERSION, "binarySha256": sha256(built)}
+            (private / "build.json").write_text(json.dumps(state))
+            target = graphics / "root" / "usr" / "bin" / "proot"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"original Ubuntu executable")
+            with redirect_stdout(io.StringIO()):
+                install_proot(graphics, graphics, graphics)
+            self.assertEqual(target.read_bytes(), built.read_bytes())
+            self.assertEqual((private / "proot.ubuntu").read_bytes(), b"original Ubuntu executable")
+            target.write_bytes(b"re-extracted Ubuntu executable")
+            with redirect_stdout(io.StringIO()):
+                install_proot(graphics, graphics, graphics)
+            self.assertEqual(target.read_bytes(), built.read_bytes())
+            self.assertEqual((private / "proot.ubuntu").read_bytes(), b"original Ubuntu executable")
+
+    def test_unverified_source_is_never_executed_or_installed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            graphics = Path(directory)
+            target = graphics / "root" / "usr" / "bin" / "proot"
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"original")
+            with redirect_stdout(io.StringIO()), patch("proot_build.urllib.request.urlopen", return_value=io.BytesIO(b"bad archive")):
+                with self.assertRaisesRegex(RuntimeError, "SHA256 mismatch"):
+                    install_proot(graphics, graphics, graphics)
+            self.assertEqual(target.read_bytes(), b"original")
+            self.assertFalse(list(graphics.glob("*.download")))
 
 
 class RuntimeTests(unittest.TestCase):

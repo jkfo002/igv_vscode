@@ -26,11 +26,18 @@ BAM、CRAM、VCF、BigWig、索引和参考序列不需要复制到本地；网�
 物理显示器、GPU、Docker 或 sudo。服务器先准备 Pixi，参考
 [Pixi 官方安装指南](https://pixi.sh/latest/installation/)。
 
-`pixi install` 从 conda-forge 安装 Java 21、Python 3.12、websockify、fontconfig
-和字体到项目的 `.pixi/envs/default`。`pixi run setup-remote` 再准备 TigerVNC、
+`pixi install` 从 conda-forge 安装 Java 21、Python 3.12、websockify、fontconfig、
+字体以及 GCC/binutils/make 编译工具到项目的 `.pixi/envs/default`。`pixi run setup-remote` 再准备 TigerVNC、
 Openbox、PRoot 和 X11/XKB，图形组件解包到同一环境的 `share/igv-remote/root/`。
 图形组件使用私有 Ubuntu 软件源和索引；它们不是由 Conda solver 管理的包。
 因此完整安装需要下面的 install 和 setup 两个步骤，单独 `pixi install` 还不能启动远程桌面。
+
+setup 从固定的上游源码构建 PRoot 5.4.0，源码按固定的 SHA256 校验。
+编译器由 Pixi 提供，`libtalloc-dev` 头文件和运行库在私有 Ubuntu 图形目录内，
+无需系统 GCC、开发包或 sudo。源码缓存、编译日志和构建记录位于
+`share/igv-remote/cache/proot-v5.4.0.tar.gz` 和 `share/igv-remote/proot/`。
+修复后的程序放到私有 `root/usr/bin/proot`，系统 `/usr/bin` 不变；原 Ubuntu
+程序备份为 `share/igv-remote/proot/proot.ubuntu`。已安装 VSIX 的原启动路径仍可使用。
 
 图形准备任务需要服务器已有 `apt-cache`、`apt-get`、`dpkg-deb`、Ubuntu 官方
 归档签名密钥及 HTTPS 下载能力，不再要求系统 Python、单独的 JDK 或 pip。
@@ -56,7 +63,10 @@ pixi run doctor --prefix "$HOME/apps/igv-remote"
 
 Pixi 首次解析依赖会生成 `pixi.lock`，应保留并提交该文件；后续用 `pixi install --locked`
 保持版本一致。图形依赖的版本和 SHA256 单独记录在环境内的 `graphics.json`，
-重复 setup 会复用已校验文件。`runtime.json` 记录真实的 Pixi Python/Java 和图形路径，
+重复 setup 会复用已校验文件，并根据 `extracted.json` 跳过已完成的解包；每个包显示
+缓存检查、下载、解包或已安装状态。中途失败可重新运行并继续未完成的包；旧安装
+根据已完成的 `graphics.json` 自动迁移，不要求重新下载全部组件。
+PRoot 构建同样缓存并校验，重复 setup 不再编译。`runtime.json` 记录真实的 Pixi Python/Java 和图形路径，
 插件因此无需先执行 `pixi shell`；不会偷偷切换到系统 Python 或其他 Conda 环境。
 移动仓库或重建 Pixi 环境后，应重新执行 `pixi run setup-remote` 更新这些绝对路径。
 旧运行目录仍可读取；新 setup 会切换到 Pixi，不自动删除旧依赖和会话文件。
@@ -101,17 +111,22 @@ pixi run python remote/test/smoke.py --igv-dir build/IGV-dist
 ```
 
 首次 install 成功后保留生成的 `pixi.lock`；已有锁文件在 manifest 更新后需先执行
-`pixi install` 重新解析，再使用 `pixi install --locked`。当前开发环境未安装 Pixi，
-因此没有提交未经实际解析生成的锁文件。原有系统 Python 3.8 不参与运行，
+`pixi install` 重新解析，再使用 `pixi install --locked`。仓库已包含在远程 20.04.3
+环境中实际解析的锁文件；default 环境和 dev 环境的 VSIX 构建均已验证。
+原有系统 Python 3.8 不参与运行，
 也不需要更改默认 Java。完成上述步骤后按下文安装 VSIX 并连接 Remote-SSH。
 [VS Code 官方要求](https://code.visualstudio.com/docs/remote/linux)包含 Ubuntu 20.04+；
 服务器仍须已有可用的 SSH 服务和所需基础工具，Pixi 不负责配置 SSH 服务。
 
-20.04 适配已加入代码和 CI 验证任务，但尚未在当前 Windows 开发环境完成
-Pixi 依赖解析或 Linux 图形实测。`doctor` 和 smoke 成功后，还须在实际服务器验证
+20.04 的安装、PRoot/XKB 映射、Java IGV 构建及真实窗口/WebSocket/会话清理 smoke
+已在一台启用 seccomp 的远程 20.04.3 容器中实测通过；
+这不代表所有服务器策略或 CI 已验收。`doctor` 和 smoke 成功后，还须在实际服务器验证
 track、菜单、弹窗、键鼠和断线恢复，不能将配置兼容视为完整功能验收。
 20.04 的标准维护已在 2025 年 5 月结束，扩展安全维护属于
 [Ubuntu Pro/ESM](https://ubuntu.com/20-04)；本安装器不启用 Pro，也不绕过其授权。
+
+该服务器的重复 `pixi run setup-remote`（缓存完整，含 doctor）完整命令实测约 0.71 秒；网络和文件系统不同，
+首次安装或 `--repair` 的耗时不能以此估算。
 
 #### 构建 Java IGV 与 VS Code 插件
 
@@ -145,6 +160,11 @@ Windows 使用 `npm.cmd`。生成 `vscode/igv-remote-0.1.0.vsix`；构建会将�
 和 noVNC 打包进插件，运行时不从 CDN 加载脚本。首次构建需要访问 npm 和 Gradle
 依赖源。Pixi dev 环境管理 Node.js，插件的 npm 依赖仍由 `package.json` 管理；
 npm 安装后请保留生成的 `package-lock.json`。
+
+noVNC 固定使用 v1.6.0 上游源码归档，其完整性由 `package-lock.json` 锁定。
+1.6.0 的 npm CommonJS 发布包包含无法通过 require 加载的顶层 await，因此
+浏览器端改用上游 ESM 源码并打包为 module 脚本；没有降级 noVNC，也不在运行时
+下载脚本。首次构建需能访问 GitHub codeload，后续可通过 `npm ci` 重现依赖。
 
 #### 安装与连接指南
 
@@ -198,11 +218,24 @@ npm 安装后请保留生成的 `package-lock.json`。
   移动仓库后也需 setup。Java/Python 使用 Pixi 库，Ubuntu 图形进程使用自己的运行库。
 - **PRoot/ptrace 被拒绝：**服务器或容器策略限制了子进程跟踪，当前用户目录图形
   运行方式无法启动；需在允许该能力的服务器运行，或调整服务器策略。
+- **PRoot 提示 `terminated with signal 31`：**旧版 PRoot 5.1 的 syscall(-2) 可能
+  触发外层 seccomp。更新仓库后先运行 `pixi install`，再执行 `pixi run setup-remote`，
+  安装器会构建兼容的 PRoot 5.4。`PROOT_NO_SECCOMP=1` 只控制 PRoot 自身的加速，
+  不能移除容器的过滤器。本修复不禁用 seccomp，也不赋予额外 capability；
+  如果平台连跟踪自己的子进程都不允许，更新 PRoot 仍不能绕过该限制。
+- **依赖文件被手动删除或损坏：**执行 `pixi run setup-remote --repair`，从校验后的
+  缓存重新解包，再恢复已编译的 PRoot。不要为普通重复安装使用 repair，否则会重复解包。
+- **PRoot 编译失败：**先运行 `pixi install` 更新编译工具，查看环境中的
+  `share/igv-remote/proot/build.log`。首次 setup 需访问 GitHub codeload 下载固定源码；
+  后续复用源码和编译缓存，不依赖系统编译器。
 - **黑屏或只显示背景：**检查 `display.log`、`openbox.log`、`igv.log`，确认 Java IGV
   未因内存、字体、配置或外部 genome 下载失败而退出。
 - **画面模糊或字符缺失：**关闭“适应窗口”使用原始像素显示，并检查安装器的字体诊断。
 - **连接失败：**确认 Remote-SSH 仍连接，查看 VS Code 的 Ports 面板和 WebSocket 日志；
   重新连接命令会重新解析转发地址。不要将原始 VNC 端口设为公开。
+- **旧版 TigerVNC 提示 `Unrecognized option: yes`：**更新并重新安装 VSIX。
+  会话启动已统一使用 `-localhost=1` 等布尔参数写法，兼容 20.04 的 TigerVNC；
+  插件打包了会话脚本，仅更新服务器仓库不会替换旧 VSIX 中的启动脚本。
 - **无法启动新会话：**已有会话尚未结束时优先重新连接；停止后等待几秒让进程清理完成。
 
 卸载前先停止所有会话。通过 VS Code 扩展面板卸载插件；依赖目录可先改名保留备份：
@@ -230,6 +263,11 @@ WebSocket/VNC 链路检查，以及 VSIX 构建任务；CI 日志需实际运行
 由于 GitHub 已停用 `ubuntu-20.04` 托管 runner，20.04 测试在 `ubuntu:20.04` 容器中进行；
 容器初始化仅准备基础系统工具，Pixi 依赖安装、图形准备、构建和 smoke 均由普通用户执行。
 容器仅用于 CI，不是服务器部署要求；容器测试也不能代替真实服务器的 ptrace 策略验收。
+
+2026-10-13 在远程 20.04.3 上验证：19 项远程单元测试、3 项插件测试、TypeScript
+检查、Java 分发构建、真实 IGV 窗口/WebSocket smoke 和 VSIX 打包通过。
+Java 全量测试共 685 项，645 项通过、38 项跳过，`JsonGenomeLoaderTest.loadGenome`
+及 `FileFormatUtilsTest.testDetermineFormat` 两项因网络访问超时失败，不能标为全量通过。
 
 ### Building
 

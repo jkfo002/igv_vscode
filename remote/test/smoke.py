@@ -64,7 +64,9 @@ def main():
     command = [manifest["python"], str(Path(__file__).resolve().parents[1] / "session.py"),
                "start", "--prefix", str(prefix), "--igv-dir", str(args.igv_dir.resolve()),
                "--owner", secrets.token_hex(16), "--memory", "2g"]
-    result = subprocess.run(command, check=True, text=True, capture_output=True, timeout=100)
+    result = subprocess.run(command, text=True, capture_output=True, timeout=100)
+    if result.returncode:
+        raise RuntimeError("Remote session startup failed: " + result.stderr.strip())
     session = json.loads(result.stdout)
     try:
         env["DISPLAY"] = session["display"]

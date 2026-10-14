@@ -1,4 +1,4 @@
-import RFB from '@novnc/novnc/lib/rfb.js';
+import RFB from '@novnc/novnc/core/rfb.js';
 
 const vscode = acquireVsCodeApi();
 const status = document.getElementById('status');

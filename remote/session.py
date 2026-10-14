@@ -223,9 +223,9 @@ def serve(directory):
                            "-b", binary(prefix, "xkbcomp") + ":/usr/bin/xkbcomp",
                            "-b", env["XKB_CONFIG_ROOT"] + ":/usr/share/X11/xkb", xvnc]
         vnc = launch("display", [*display_command, env["DISPLAY"], "-geometry", "1600x900", "-depth", "24",
-                    "-localhost", "yes", "-rfbport", str(vnc_port), "-SecurityTypes", "VncAuth",
+                    "-localhost=1", "-rfbport", str(vnc_port), "-SecurityTypes", "VncAuth",
                     "-PasswordFile", str(password), "-auth", env["XAUTHORITY"], "-nolisten", "tcp",
-                    "-fp", "built-ins", "-NeverShared", "yes", "-DisconnectClients", "yes", "-FrameRate", "30", *extra], native=True)
+                    "-fp", "built-ins", "-NeverShared=1", "-DisconnectClients=1", "-FrameRate", "30", *extra], native=True)
         wait_port(vnc_port, vnc, cancel=controller.stop)
         launch("openbox", [binary(prefix, "openbox"), "--config-file", str(desktop_config(directory))], native=True)
         prefs = directory / "igv.properties"
